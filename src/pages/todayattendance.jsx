@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../api";
 
 const c = {
@@ -191,6 +191,14 @@ export default function TodayAttendance() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState({ text: "", error: false });
 
+  // ---- auto save helpers ----
+  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
+  const [savedAt, setSavedAt] = useState(null);
+  const dateRef = useRef(""); // date of the attendance currently on screen
+  const latestIds = useRef([]); // latest ticked student ids
+  const savePromise = useRef(null); // save currently running (if any)
+  const again = useRef(false); // another save needed after current one
+
   const showMsg = (text, error = false) => {
     setMsg({ text, error });
     setTimeout(() => setMsg({ text: "", error: false }), 4000);
@@ -202,10 +210,12 @@ export default function TodayAttendance() {
       const sorted = sortById(data.students);
       const validIds = new Set(sorted.map((s) => s._id));
       setDate(data.date);
+      dateRef.current = data.date;
       setStudents(sorted);
       // keep only ids that belong to real students
       setChecked(new Set(data.presentIds.filter((id) => validIds.has(id))));
       setDirty(false);
+      setSaveState("idle");
     } catch (err) {
       showMsg("Could not load attendance", true);
     }
@@ -213,6 +223,28 @@ export default function TodayAttendance() {
 
   useEffect(() => {
     load();
+  }, []);
+
+  // after 12 midnight (India time) a new day starts: reload so everyone
+  // shows as absent again (old days stay safe in the database)
+  useEffect(() => {
+    const todayIST = () =>
+      new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+    const check = () => {
+      if (
+        dateRef.current &&
+        dateRef.current !== todayIST() &&
+        !savePromise.current
+      ) {
+        load();
+      }
+    };
+    const timer = setInterval(check, 30000);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", check);
+    };
   }, []);
 
   const filtered = useMemo(() => {
@@ -237,11 +269,63 @@ export default function TodayAttendance() {
     [students, checked]
   );
 
+  // saves the latest ticked list. If a save is already running, it is
+  // repeated once more afterwards so the newest ticks are never lost.
+  const runSave = () => {
+    if (savePromise.current) {
+      again.current = true;
+      return savePromise.current;
+    }
+    setSaveState("saving");
+    const p = (async () => {
+      let ok = true;
+      let count = 0;
+      try {
+        do {
+          again.current = false;
+          const { data } = await api.put("/attendance/today", {
+            date: dateRef.current,
+            studentIds: latestIds.current,
+          });
+          count = data.count;
+        } while (again.current);
+        setSaveState("saved");
+        setSavedAt(new Date());
+        setDirty(false);
+      } catch (err) {
+        ok = false;
+        if (err.response?.status === 409) {
+          // midnight passed while the page was open
+          showMsg("A new day has started. Attendance reloaded.", true);
+          savePromise.current = null;
+          await load();
+        } else {
+          setSaveState("error");
+          showMsg("Save failed", true);
+        }
+      } finally {
+        savePromise.current = null;
+      }
+      return { ok, count };
+    })();
+    savePromise.current = p;
+    return p;
+  };
+
+  const autoSave = (idSet) => {
+    latestIds.current = students
+      .filter((s) => idSet.has(s._id))
+      .map((s) => s._id);
+    runSave();
+  };
+
   const toggle = (id) => {
     const next = new Set(checked);
     next.has(id) ? next.delete(id) : next.add(id);
     setChecked(next);
     setDirty(true);
+    setSearch(""); // clear the search bar after every tick
+    autoSave(next);
   };
 
   const allFilteredChecked =
@@ -253,23 +337,19 @@ export default function TodayAttendance() {
     else filtered.forEach((s) => next.add(s._id));
     setChecked(next);
     setDirty(true);
+    autoSave(next);
   };
 
+  // manual "Save Attendance" button (also used by Print)
   const save = async () => {
     setBusy(true);
-    try {
-      const { data } = await api.put("/attendance/today", {
-        studentIds: presentList.map((s) => s._id),
-      });
-      showMsg(`Attendance saved. ${data.count} student(s) present.`);
-      setDirty(false);
-      return true;
-    } catch (err) {
-      showMsg("Save failed", true);
-      return false;
-    } finally {
-      setBusy(false);
+    latestIds.current = presentList.map((s) => s._id);
+    const result = await runSave();
+    setBusy(false);
+    if (result.ok) {
+      showMsg(`Attendance saved. ${result.count} student(s) present.`);
     }
+    return result.ok;
   };
 
   const printAttendance = async () => {
@@ -413,7 +493,7 @@ export default function TodayAttendance() {
               <div style={{ fontWeight: 700, fontSize: 17, color: c.text }}>
                 Attendance for {formatDate(date)}
               </div>
-              {dirty && (
+              {saveState === "saving" && (
                 <span
                   style={{
                     background: "#fff4e0",
@@ -424,12 +504,48 @@ export default function TodayAttendance() {
                     fontWeight: 700,
                   }}
                 >
-                  Unsaved changes
+                  Saving...
+                </span>
+              )}
+              {saveState === "saved" && !dirty && (
+                <span
+                  style={{
+                    background: c.successSoft,
+                    color: c.success,
+                    padding: "3px 10px",
+                    borderRadius: 999,
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  ✓ Auto-saved
+                  {savedAt
+                    ? " at " +
+                      savedAt.toLocaleTimeString("en-IN", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                      })
+                    : ""}
+                </span>
+              )}
+              {saveState === "error" && (
+                <span
+                  style={{
+                    background: c.dangerSoft,
+                    color: c.danger,
+                    padding: "3px 10px",
+                    borderRadius: 999,
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  Not saved - press Save Attendance
                 </span>
               )}
             </div>
             <div style={{ fontSize: 13, color: c.muted, marginTop: 2 }}>
-              Tick the students who are present, then save
+              Tick the students who are present - it saves automatically
             </div>
           </div>
 

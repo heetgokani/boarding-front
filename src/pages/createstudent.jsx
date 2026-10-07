@@ -24,6 +24,7 @@ const paths = {
     '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
   search:
     '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>',
   trash:
     '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
 };
@@ -134,6 +135,8 @@ export default function CreateStudent() {
   const [search, setSearch] = useState("");
   const [msg, setMsg] = useState({ text: "", error: false });
   const fileRef = useRef(null);
+  const [editing, setEditing] = useState(null); // { _id, name, studentId }
+  const [editBusy, setEditBusy] = useState(false);
 
   const showMsg = (text, error = false) => {
     setMsg({ text, error });
@@ -202,6 +205,28 @@ export default function CreateStudent() {
       window.URL.revokeObjectURL(url);
     } catch (err) {
       showMsg("Export failed", true);
+    }
+  };
+
+  const openEdit = (s) =>
+    setEditing({ _id: s._id, name: s.name, studentId: s.studentId });
+
+  const saveEdit = async (e) => {
+    e.preventDefault();
+    if (!editing) return;
+    setEditBusy(true);
+    try {
+      await api.put(`/students/${editing._id}`, {
+        name: editing.name,
+        studentId: editing.studentId,
+      });
+      setEditing(null);
+      showMsg("Student updated successfully");
+      loadStudents();
+    } catch (err) {
+      showMsg(err.response?.data?.message || "Update failed", true);
+    } finally {
+      setEditBusy(false);
     }
   };
 
@@ -478,15 +503,33 @@ export default function CreateStudent() {
                     </span>
                   </td>
                   <td style={{ ...td, textAlign: "right" }}>
-                    <button
-                      onClick={() => removeStudent(s._id)}
+                    <div
                       style={{
-                        ...btn(c.dangerSoft, c.danger),
-                        padding: "7px 12px",
+                        display: "inline-flex",
+                        gap: 8,
+                        flexWrap: "wrap",
+                        justifyContent: "flex-end",
                       }}
                     >
-                      <Icon name="trash" size={16} /> Delete
-                    </button>
+                      <button
+                        onClick={() => openEdit(s)}
+                        style={{
+                          ...btn(c.primarySoft, c.primary),
+                          padding: "7px 12px",
+                        }}
+                      >
+                        <Icon name="edit" size={16} /> Edit
+                      </button>
+                      <button
+                        onClick={() => removeStudent(s._id)}
+                        style={{
+                          ...btn(c.dangerSoft, c.danger),
+                          padding: "7px 12px",
+                        }}
+                      >
+                        <Icon name="trash" size={16} /> Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -509,6 +552,100 @@ export default function CreateStudent() {
           </table>
         </div>
       </div>
+
+      {/* edit student popup */}
+      {editing && (
+        <div
+          onClick={() => !editBusy && setEditing(null)}
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(15,23,42,0.5)",
+            zIndex: 100,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <form
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={saveEdit}
+            style={{ ...card, width: "100%", maxWidth: 420 }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                marginBottom: 18,
+              }}
+            >
+              <div
+                style={{
+                  width: 42,
+                  height: 42,
+                  borderRadius: 12,
+                  background: c.primarySoft,
+                  color: c.primary,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Icon name="edit" size={21} />
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 16, color: c.text }}>
+                  Edit Student
+                </div>
+                <div style={{ fontSize: 13, color: c.muted }}>
+                  Change the name or ID
+                </div>
+              </div>
+            </div>
+
+            <label style={label}>Student Name</label>
+            <input
+              style={{ ...inputStyle, marginBottom: 14 }}
+              value={editing.name}
+              onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+              required
+              autoFocus
+            />
+            <label style={label}>Student ID</label>
+            <input
+              style={{ ...inputStyle, marginBottom: 18 }}
+              value={editing.studentId}
+              onChange={(e) =>
+                setEditing({ ...editing, studentId: e.target.value })
+              }
+              required
+            />
+
+            <div style={{ display: "flex", gap: 12 }}>
+              <button
+                type="button"
+                onClick={() => setEditing(null)}
+                disabled={editBusy}
+                style={{ ...btnOutline, flex: 1 }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={editBusy}
+                style={{ ...btn(), flex: 1, opacity: editBusy ? 0.7 : 1 }}
+              >
+                {editBusy ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
