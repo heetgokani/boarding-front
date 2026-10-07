@@ -137,6 +137,14 @@ const initials = (name) =>
     .map((w) => w[0].toUpperCase())
     .join("") || "?";
 
+// sort by student id numerically: 1, 2, 3 ... 10, 11
+const sortById = (list) =>
+  [...list].sort((a, b) =>
+    String(a.studentId).localeCompare(String(b.studentId), undefined, {
+      numeric: true,
+    })
+  );
+
 function Stat({ icon, label, value, color, soft }) {
   return (
     <div style={{ ...card, display: "flex", alignItems: "center", gap: 16 }}>
@@ -191,9 +199,12 @@ export default function TodayAttendance() {
   const load = async () => {
     try {
       const { data } = await api.get("/attendance/today");
+      const sorted = sortById(data.students);
+      const validIds = new Set(sorted.map((s) => s._id));
       setDate(data.date);
-      setStudents(data.students);
-      setChecked(new Set(data.presentIds));
+      setStudents(sorted);
+      // keep only ids that belong to real students
+      setChecked(new Set(data.presentIds.filter((id) => validIds.has(id))));
       setDirty(false);
     } catch (err) {
       showMsg("Could not load attendance", true);
@@ -220,6 +231,12 @@ export default function TodayAttendance() {
     });
   }, [students, search, view, checked]);
 
+  // students who really exist and are ticked
+  const presentList = useMemo(
+    () => students.filter((s) => checked.has(s._id)),
+    [students, checked]
+  );
+
   const toggle = (id) => {
     const next = new Set(checked);
     next.has(id) ? next.delete(id) : next.add(id);
@@ -242,7 +259,7 @@ export default function TodayAttendance() {
     setBusy(true);
     try {
       const { data } = await api.put("/attendance/today", {
-        studentIds: Array.from(checked),
+        studentIds: presentList.map((s) => s._id),
       });
       showMsg(`Attendance saved. ${data.count} student(s) present.`);
       setDirty(false);
@@ -256,7 +273,7 @@ export default function TodayAttendance() {
   };
 
   const printAttendance = async () => {
-    const present = students.filter((s) => checked.has(s._id));
+    const present = presentList;
     if (present.length === 0) {
       showMsg("Please select at least one student to print", true);
       return;
@@ -304,7 +321,7 @@ export default function TodayAttendance() {
   };
 
   const total = students.length;
-  const presentCount = checked.size;
+  const presentCount = presentList.length;
   const absentCount = Math.max(total - presentCount, 0);
 
   const tab = (key, label) => {
