@@ -1,7 +1,7 @@
 import axios from "axios";
 
 // ===== CHANGE ONLY THIS LINE when you host the backend (example: https://your-app.onrender.com/api) =====
-const BASE_URL = "http://localhost:5000/api";
+const BASE_URL = "https://boarding-back.onrender.com/api";
 // =======================================================================================================
 
 const api = axios.create({
